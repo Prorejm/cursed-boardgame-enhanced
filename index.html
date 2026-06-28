@@ -3,12 +3,70 @@
 <head>
 <meta charset="utf-8">
 <title>被诅咒的棋盘游戏 - 升级版 | Cursed Boardgame Enhanced</title>
-<script>location.href = "cursed/";</script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  body { text-align: center; padding: 40px 20px; background: #1a1a2e; color: #eee; font-family: 'Segoe UI', Tahoma, sans-serif; margin:0; }
+  h1 { font-size: 36px; color: #ffcc00; text-shadow: 2px 2px 4px #000; }
+  .subtitle { color: #aaa; font-size: 18px; margin-bottom: 20px; }
+  .game-link {
+    display: inline-block;
+    padding: 20px 60px;
+    background: linear-gradient(135deg, #667eea, #764ba2);
+    color: #fff;
+    font-size: 28px;
+    text-decoration: none;
+    border-radius: 15px;
+    box-shadow: 0 8px 32px rgba(102,126,234,0.4);
+    transition: all 0.3s;
+    margin: 30px 0;
+  }
+  .game-link:hover { transform: scale(1.05); box-shadow: 0 12px 40px rgba(102,126,234,0.6); }
+  .credits { margin-top: 50px; color: #888; font-size: 14px; line-height: 1.8; }
+  .credits a { color: #667eea; }
+  .badge {
+    display: inline-block;
+    background: #ff6b6b;
+    color: #fff;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 14px;
+    margin-left: 10px;
+  }
+  .features { max-width: 600px; margin: 30px auto; text-align: left; color: #ccc; line-height: 2.2; }
+  .features li { list-style: none; }
+  .features li::before { content: '✨ '; }
+  .auto-msg { color: #555; font-size: 13px; margin-top: 10px; }
+</style>
 </head>
 <body>
-<p style="text-align:center;padding-top:20%;font-family:sans-serif;color:#666;">
-  正在跳转到游戏页面...<br/>
-  <a href="cursed/" style="color:#667eea;">如果未自动跳转，请点击这里</a>
-</p>
+  <h1>🎲 被诅咒的棋盘游戏</h1>
+  <p class="subtitle">Cursed Boardgame — Interactive CYOA <span class="badge">v2.1 升级版</span></p>
+  
+  <a class="game-link" href="cursed/">🎮 开始游戏</a>
+  <p class="auto-msg">（3秒后自动跳转至游戏页面）</p>
+  
+  <div class="features">
+    <p><strong>升级内容:</strong></p>
+    <li>棋盘从 10×10 扩展至 <strong>12×12 (144格)</strong></li>
+    <li>新增骰子模式: 1d6 / 2d3 / 1d8 / 1d4 随时切换</li>
+    <li>新增事件: 休息站、挑战格</li>
+    <li><strong>7种结局</strong> + <strong>无尽模式</strong> + <strong>3种棋盘布局</strong></li>
+    <li>存档/读档系统 (localStorage)</li>
+    <li>实时游戏事件日志</li>
+    <li>完全中文化界面</li>
+  </div>
+  
+  <div class="credits">
+    <p>
+      原版游戏由 <strong><a href="https://reddit.com/u/chinesesilklanterns">/u/chinesesilklanterns</a></strong> 于 2020 年 5 月创作<br/>
+      本升级版在原协议下发布，保留原作者署名<br/>
+      <em>License: Free non-commercial use with attribution to original creator</em>
+    </p>
+    <p style="margin-top:20px; font-size:12px;">
+      'icons' 文件夹内插图版权归各自艺术家所有
+    </p>
+  </div>
+
+  <script>setTimeout(function(){ location.href = "cursed/"; }, 3000);</script>
 </body>
 </html>
