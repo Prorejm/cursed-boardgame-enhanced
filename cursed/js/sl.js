@@ -41,6 +41,31 @@ var gameLog = [];
 var diceMode = 0; // 0=1d6, 1=2d3, 2=1d8, 3=1d4
 var gameSaved = false;
 
+//============================================================
+// BOARD MODE SYSTEM & ENDLESS MODE
+//============================================================
+
+var TOTAL_CELLS = 144;
+
+// Board mode: 0=Snake/蛇形, 1=Spiral/螺旋, 2=Loop/环线
+var boardMode = 0;
+var endlessMode = false;
+var lapCount = 0;
+
+// Data tracking
+var wildMagicCount = 0;
+var shrineVisits = 0;
+var totalSteps = 0;
+
+// Precomputed board layout arrays for non-snake modes
+var spiralOrder = [];
+var loopOrder = [];
+var innerLoopOrder = [];
+var spiralReverseMap = {};
+var loopReverseMap = {};
+var innerLoopReverseMap = {};
+var PERIMETER_CELLS = 44; // 12*4 - 4 = 44 perimeter cells in loop mode
+
 // Player stats initialization
 playertoken.inv = [];
 playertoken.stats = {
@@ -67,6 +92,76 @@ playertoken.lastrolled = 0;
 playertoken.lastselecteditem = 0;
 
 //============================================================
+// BOARD LAYOUT PRECOMPUTATION
+//============================================================
+
+function generateSpiralOrder(size) {
+  // Generate inward clockwise spiral (perimeter to center)
+  var inward = [];
+  var r1 = 0, r2 = size - 1, c1 = 0, c2 = size - 1;
+  while (inward.length < size * size) {
+    for (var c = c1; c <= c2 && inward.length < size * size; c++) inward.push({row: r1, col: c});
+    r1++;
+    for (var r = r1; r <= r2 && inward.length < size * size; r++) inward.push({row: r, col: c2});
+    c2--;
+    for (var c = c2; c >= c1 && inward.length < size * size; c--) inward.push({row: r2, col: c});
+    r2--;
+    for (var r = r2; r >= r1 && inward.length < size * size; r--) inward.push({row: r, col: c1});
+    c1++;
+  }
+  // Reverse to get outward spiral (center to perimeter)
+  return inward.reverse();
+}
+
+function generateLoopOrder(size) {
+  // Rectangle perimeter loop: start at bottom-left, go clockwise
+  var order = [];
+  // Bottom row (left to right)
+  for (var c = 0; c < size; c++) order.push({row: size-1, col: c});
+  // Right column (bottom-1 to top)
+  for (var r = size-2; r >= 0; r--) order.push({row: r, col: size-1});
+  // Top row (right-1 to left)
+  for (var c = size-2; c >= 0; c--) order.push({row: 0, col: c});
+  // Left column (top+1 to bottom-1)
+  for (var r = 1; r < size-1; r++) order.push({row: r, col: 0});
+  return order;
+}
+
+function generateInnerLoopOrder(size) {
+  // Inner cells in row-major order (excluding perimeter)
+  var order = [];
+  for (var r = 1; r < size-1; r++) {
+    for (var c = 1; c < size-1; c++) {
+      order.push({row: r, col: c});
+    }
+  }
+  return order;
+}
+
+function buildReverseMap(order) {
+  var map = {};
+  for (var i = 0; i < order.length; i++) {
+    var key = order[i].row + ',' + order[i].col;
+    map[key] = i + 1; // 1-indexed cell numbers
+  }
+  return map;
+}
+
+function initBoardLayouts() {
+  spiralOrder = generateSpiralOrder(BOARD_SIZE);
+  spiralReverseMap = buildReverseMap(spiralOrder);
+  
+  loopOrder = generateLoopOrder(BOARD_SIZE);
+  loopReverseMap = buildReverseMap(loopOrder);
+  
+  innerLoopOrder = generateInnerLoopOrder(BOARD_SIZE);
+  innerLoopReverseMap = buildReverseMap(innerLoopOrder);
+}
+
+// Call layout initialization immediately
+initBoardLayouts();
+
+//============================================================
 // SAVE/LOAD SYSTEM (localStorage)
 //============================================================
 
@@ -80,7 +175,13 @@ function saveGame() {
       tfcounter: tfcounter,
       money: money,
       diceMode: diceMode,
-      gameLog: gameLog.slice(-20)
+      gameLog: gameLog.slice(-20),
+      boardMode: boardMode,
+      endlessMode: endlessMode,
+      lapCount: lapCount,
+      wildMagicCount: wildMagicCount,
+      shrineVisits: shrineVisits,
+      totalSteps: totalSteps
     };
     localStorage.setItem('cursedBoardgameSave', JSON.stringify(saveData));
     showPopup("<u>Game Saved</u><br/><br/>Your progress has been saved. You can continue where you left off next time!");
@@ -105,6 +206,12 @@ function loadGame() {
     money = saveData.money || 0;
     diceMode = saveData.diceMode || 0;
     gameLog = saveData.gameLog || [];
+    boardMode = saveData.boardMode || 0;
+    endlessMode = saveData.endlessMode || false;
+    lapCount = saveData.lapCount || 0;
+    wildMagicCount = saveData.wildMagicCount || 0;
+    shrineVisits = saveData.shrineVisits || 0;
+    totalSteps = saveData.totalSteps || 0;
     
     return true;
   } catch(e) {
@@ -121,6 +228,155 @@ function deleteSave() {
 }
 
 //============================================================
+// BOARD MODE SWITCHING
+//============================================================
+
+function switchBoardMode(mode) {
+  if (mode < 0 || mode > 2) return;
+  boardMode = mode;
+  
+  // Recalculate grid layouts (already precomputed, just re-render)
+  generateBoard();
+  placeIconsOnBoard();
+  
+  // Reposition player token
+  var displayPos;
+  if (playertoken.currentpos <= 1) displayPos = "Start";
+  else if (playertoken.currentpos >= TOTAL_CELLS) displayPos = "End";
+  else displayPos = playertoken.currentpos;
+  
+  var px = getCellPixelPosition(playertoken.currentpos <= 1 ? 1 : (playertoken.currentpos >= TOTAL_CELLS ? TOTAL_CELLS : playertoken.currentpos));
+  
+  var playerEl = document.getElementById('player');
+  if (playerEl) {
+    playerEl.style.transition = 'top 0.4s ease, left 0.4s ease';
+    playerEl.style.top = px.y + 'px';
+    playerEl.style.left = px.x + 'px';
+  }
+  
+  var modeNames = ["蛇形 (Snake)", "螺旋 (Spiral)", "环线 (Loop)"];
+  addLog("Board mode switched to: " + modeNames[mode]);
+  updateEndlessUI();
+}
+
+function toggleEndlessMode() {
+  if (playertoken.currentpos > 1 && playertoken.currentpos < TOTAL_CELLS) {
+    showPopup("<u>Cannot Change</u><br/><br/>Endless mode can only be toggled before the game starts or from the main menu.");
+    return;
+  }
+  endlessMode = !endlessMode;
+  addLog("Endless mode: " + (endlessMode ? "ON" : "OFF"));
+  updateEndlessUI();
+  
+  var msg = endlessMode
+    ? "<u>Endless Mode Activated</u><br/><br/>When you reach the end, you'll begin a new lap instead of finishing! Events will grow more dangerous each lap."
+    : "<u>Endless Mode Deactivated</u><br/><br/>The game will end normally when you reach the final cell.";
+  showPopup(msg);
+}
+
+function updateEndlessUI() {
+  // Update endless mode indicator in sidebar
+  var endlessIndicator = document.getElementById('endlessIndicator');
+  if (endlessIndicator) {
+    if (endlessMode) {
+      endlessIndicator.style.display = 'block';
+      endlessIndicator.innerHTML = "无尽模式<br/><span style='font-size:14px;'>第 " + lapCount + " 圈</span>";
+    } else {
+      endlessIndicator.style.display = 'none';
+    }
+  }
+  
+  // Update board mode buttons
+  var modeButtons = document.querySelectorAll('.boardModeBtn');
+  if (modeButtons) {
+    for (var i = 0; i < modeButtons.length; i++) {
+      if (modeButtons[i]) {
+        modeButtons[i].className = 'boardModeBtn' + (i === boardMode ? ' active' : '');
+      }
+    }
+  }
+  
+  // Update endless toggle button
+  var endlessBtn = document.getElementById('endlessToggleBtn');
+  if (endlessBtn) {
+    endlessBtn.textContent = endlessMode ? '无尽: ON' : '无尽: OFF';
+    endlessBtn.className = 'endlessToggleBtn' + (endlessMode ? ' on' : '');
+  }
+}
+
+//============================================================
+// ENDING SYSTEM
+//============================================================
+
+function getEndingType() {
+  // Endless mode check (highest priority)
+  if (endlessMode && lapCount > 0) {
+    return {
+      type: "endless",
+      title: "无尽轮回",
+      desc: "你已经超越了游戏的边界，进入了无尽的轮回之中。每一圈都带来新的挑战和变化。你究竟会变成什么样子？也许永远不会有答案..."
+    };
+  }
+  
+  // Rich ending
+  if (money >= 2000) {
+    return {
+      type: "rich",
+      title: "亿万富翁",
+      desc: "财富如潮水般涌来！你不仅成功逃脱，还带走了令人瞠目结舌的财富。生活从此改变，但你确定金钱能买到一切吗？<br/><br/>也许那些在旅途中失去的东西，远比金币更珍贵..."
+    };
+  }
+  
+  // Max power ending: sum of core attributes
+  var coreAttrs = ["strength","stamina","dexterity","eyesight","constitution","intelligence","charisma","talent","luck"];
+  var attrSum = 0;
+  for (var i = 0; i < coreAttrs.length; i++) {
+    attrSum += playertoken.stats[coreAttrs[i]] || 0;
+  }
+  if (attrSum >= 30) {
+    return {
+      type: "max_power",
+      title: "全能之躯",
+      desc: "你的身体和能力已经强化到了超凡的境界！每一寸肌肉、每一点智慧都达到了巅峰。你不仅逃脱了，更进化成了超越常人的存在。<br/><br/>世界在你面前展开，没有什么能够阻挡你。"
+    };
+  }
+  
+  // Chaos ending
+  if (wildMagicCount >= 3) {
+    return {
+      type: "chaos",
+      title: "混沌使者",
+      desc: "狂野的魔法能量在你体内流淌！三次以上的混沌遭遇改变了你的本质。你不再完全属于这个世界，成为了混沌本身的化身。<br/><br/>魔法在你的指尖跳跃，但代价是什么？也许连你自己也不记得了..."
+    };
+  }
+  
+  // Gender bent ending
+  if (playertoken.stats["gender"] > 0 || playertoken.stats["name change"] > 0 || playertoken.stats["palette swap"] > 0) {
+    return {
+      type: "gender_bent",
+      title: "蜕变新生",
+      desc: "这趟旅程彻底改变了你——不仅仅是外表，还有你的本质。站在终点回望，你几乎认不出镜子中的自己。<br/><br/>但这真的是坏事吗？新的身份、新的开始，一个全新的你正准备迎接这个世界。"
+    };
+  }
+  
+  // Transformed ending
+  if (tfcounter >= 5) {
+    return {
+      type: "transformed",
+      title: "彻底转化",
+      desc: "你经历了五次以上的诅咒转化，身体和灵魂都留下了不可磨灭的印记。你已经不再是当初那个踏入游戏的人了。<br/><br/>但这些改变塑造了现在的你——一个更复杂、更有深度的存在。适应它们，拥抱它们。"
+    };
+  }
+  
+  // Escape ending (default / < 3 curses)
+  return {
+    type: "escape",
+    title: "安然逃脱",
+    desc: "你几乎毫发无损地逃脱了！命运眷顾了你的旅程，让你以最小的改变逃离了诅咒之地的魔爪。<br/><br/>你带着经验和财富回到了现实世界——虽然可能有一两个小小的...惊喜。但总的来说，你已经赢得了自由。"
+  };
+}
+
+//============================================================
 // BOARD/POSITIONING - 12x12 Dynamic Grid
 //============================================================
 
@@ -130,25 +386,54 @@ function getCellDisplayName(pos) {
   return String(pos);
 }
 
-// Convert cell number to grid position on a snake-style 12x12 board
+// Convert cell number to grid position based on current board mode
 function cellToGrid(cellNum) {
-  if (cellNum <= 1) return { row: 11, col: 0 }; // Start
-  if (cellNum >= TOTAL_CELLS) return { row: 0, col: 11 }; // End
-  
-  var actualNum = cellNum - 1; // 0-indexed
-  var rowFromBottom = Math.floor(actualNum / BOARD_SIZE);
-  var row = (BOARD_SIZE - 1) - rowFromBottom;
-  var col = actualNum % BOARD_SIZE;
-  
-  // Reverse direction on even rows (from bottom)
-  if (rowFromBottom % 2 === 0) {
-    // left to right
+  // Handle special positions for all modes
+  if (boardMode === 0) {
+    // Snake mode - existing logic
+    if (cellNum <= 1) return { row: 11, col: 0 }; // Start
+    if (cellNum >= TOTAL_CELLS) return { row: 0, col: 11 }; // End
+    
+    var actualNum = cellNum - 1;
+    var rowFromBottom = Math.floor(actualNum / BOARD_SIZE);
+    var row = (BOARD_SIZE - 1) - rowFromBottom;
+    var col = actualNum % BOARD_SIZE;
+    
+    // Reverse direction on odd rows from bottom
+    if (rowFromBottom % 2 !== 0) {
+      col = (BOARD_SIZE - 1) - col;
+    }
+    
+    return { row: row, col: col };
+    
+  } else if (boardMode === 1) {
+    // Spiral mode - center outward
+    if (cellNum <= 1) return spiralOrder[0]; // Start (center)
+    if (cellNum >= TOTAL_CELLS) return spiralOrder[spiralOrder.length - 1]; // End (outermost)
+    
+    var idx = cellNum - 1;
+    if (idx >= 0 && idx < spiralOrder.length) {
+      return spiralOrder[idx];
+    }
+    return spiralOrder[spiralOrder.length - 1];
+    
   } else {
-    // right to left
-    col = (BOARD_SIZE - 1) - col;
+    // Loop mode - rectangle perimeter
+    if (cellNum <= 1) return { row: BOARD_SIZE - 1, col: 0 }; // Start (bottom-left)
+    if (cellNum >= TOTAL_CELLS) return innerLoopOrder[innerLoopOrder.length - 1]; // End (last inner cell)
+    
+    if (cellNum <= PERIMETER_CELLS) {
+      // Perimeter cells
+      return loopOrder[cellNum - 1];
+    } else {
+      // Inner cells (shortcuts)
+      var innerIdx = cellNum - PERIMETER_CELLS - 1;
+      if (innerIdx >= 0 && innerIdx < innerLoopOrder.length) {
+        return innerLoopOrder[innerIdx];
+      }
+      return innerLoopOrder[innerLoopOrder.length - 1];
+    }
   }
-  
-  return { row: row, col: col };
 }
 
 function getCellPixelPosition(cellNum) {
@@ -180,27 +465,55 @@ function generateBoard() {
 }
 
 function gridToCellNumber(row, col) {
-  var rowFromBottom = (BOARD_SIZE - 1) - row;
-  
-  if (rowFromBottom === 0) {
-    // First row (bottom): Start at col 0, then numbers increase left to right
-    if (col === 0) return 1;
-    return col + 1;
-  }
-  
-  if (rowFromBottom === BOARD_SIZE - 1) {
-    // Last row (top): End at last column
-    if (col === BOARD_SIZE - 1) return TOTAL_CELLS;
-  }
-  
-  if (rowFromBottom % 2 === 1) {
-    // Odd rows from bottom: right to left
-    var base = rowFromBottom * BOARD_SIZE + 1;
-    return base + (BOARD_SIZE - 1 - col);
+  // Convert grid position to cell number based on current board mode
+  if (boardMode === 0) {
+    // Snake mode - existing logic
+    var rowFromBottom = (BOARD_SIZE - 1) - row;
+    
+    if (rowFromBottom === 0) {
+      // First row (bottom): Start at col 0, then numbers increase left to right
+      if (col === 0) return 1;
+      return col + 1;
+    }
+    
+    if (rowFromBottom === BOARD_SIZE - 1) {
+      // Last row (top): End at last column
+      if (col === BOARD_SIZE - 1) return TOTAL_CELLS;
+    }
+    
+    if (rowFromBottom % 2 === 1) {
+      // Odd rows from bottom: right to left
+      var base = rowFromBottom * BOARD_SIZE + 1;
+      return base + (BOARD_SIZE - 1 - col);
+    } else {
+      // Even rows from bottom (except row 0): left to right
+      var base = rowFromBottom * BOARD_SIZE + 1;
+      return base + col;
+    }
+    
+  } else if (boardMode === 1) {
+    // Spiral mode - look up in reverse map
+    var key = row + ',' + col;
+    if (spiralReverseMap[key] !== undefined) {
+      return spiralReverseMap[key];
+    }
+    return 1; // fallback
+    
   } else {
-    // Even rows from bottom (except row 0): left to right
-    var base = rowFromBottom * BOARD_SIZE + 1;
-    return base + col;
+    // Loop mode
+    var key = row + ',' + col;
+    
+    // Check perimeter first
+    if (loopReverseMap[key] !== undefined) {
+      return loopReverseMap[key];
+    }
+    
+    // Check inner cells
+    if (innerLoopReverseMap[key] !== undefined) {
+      return PERIMETER_CELLS + innerLoopReverseMap[key];
+    }
+    
+    return 1; // fallback
   }
 }
 
@@ -241,6 +554,28 @@ function placeIconsOnBoard() {
 playertoken.setpos = function(curpos) {
   playertoken.currentpos = curpos;
   
+  // Endless mode check: if reaching the end, wrap around instead of game over
+  if (endlessMode && (curpos === "End" || curpos >= TOTAL_CELLS)) {
+    lapCount++;
+    playertoken.currentpos = 1;
+    addLog("Entered lap " + lapCount + " in endless mode!");
+    
+    var px = getCellPixelPosition(1);
+    var playerEl = document.getElementById('player');
+    if (playerEl) {
+      playerEl.style.transition = 'top 0.4s ease, left 0.4s ease';
+      playerEl.style.top = px.y + 'px';
+      playerEl.style.left = px.x + 'px';
+    }
+    
+    updateEndlessUI();
+    
+    showPopup("<u>进入第 " + lapCount + " 圈！</u><br/><br/><span style='color:yellow'><em>\"旅程永无止境...\"</em></span><br/><br/>你完成了第 " + (lapCount - 1) + " 圈，现在开始第 " + lapCount + " 圈！<br/><br/><span style='color:red'>难度提升！事件变得更加危险了！</span>");
+    
+    setTimeout(function() { enableUI(); }, 800);
+    return;
+  }
+  
   var px = getCellPixelPosition(curpos);
   
   var playerEl = document.getElementById('player');
@@ -260,6 +595,8 @@ playertoken.setpos = function(curpos) {
 };
 
 playertoken.gameover = function() {
+  var ending = getEndingType();
+  
   setTimeout(function() {
     document.getElementById('finalinspect').style.display = '';
     document.getElementById('finalinspect').style.opacity = '0';
@@ -270,6 +607,18 @@ playertoken.gameover = function() {
     document.getElementById('msgComplete').style.display = 'block';
   }, 1000);
   
+  // Set ending title
+  var endingTitleEl = document.getElementById('endingTitle');
+  if (endingTitleEl) {
+    endingTitleEl.innerHTML = "结局: " + ending.title;
+  }
+  
+  var endingDescEl = document.getElementById('endingDesc');
+  if (endingDescEl) {
+    endingDescEl.innerHTML = ending.desc;
+  }
+  
+  // Build prognosis based on tfcounter (existing logic preserved)
   var prog = "";
   if (tfcounter === 0) {
     prog = "You somehow made it through entirely unscathed. Perhaps fate has other plans...";
@@ -284,8 +633,16 @@ playertoken.gameover = function() {
   }
   
   document.getElementById('prognosis').innerHTML = prog;
-  document.getElementById('tfcount').innerHTML = "Total Curses Received: " + tfcounter + " | Cash Earned: $" + money;
-  addLog("Game completed! Total curses: " + tfcounter + ", Cash: $" + money);
+  document.getElementById('tfcount').innerHTML = "Total Curses Received: " + tfcounter + " | Cash Earned: $" + money + " | Ending: " + ending.title;
+  
+  // Display ending type tag
+  var endingTagEl = document.getElementById('endingTag');
+  if (endingTagEl) {
+    endingTagEl.innerHTML = "结局类型: <span style='color:lime'>" + ending.title + "</span>";
+    endingTagEl.style.display = 'block';
+  }
+  
+  addLog("Game completed! Ending: " + ending.title + " | Total curses: " + tfcounter + ", Cash: $" + money);
   
   // Auto-save completion
   saveGame();
@@ -301,6 +658,7 @@ var nextscreen = function(oldscreen, newscreen) {
   if (newscreen === 'screen4') {
     generateBoard();
     placeIconsOnBoard();
+    updateEndlessUI();
     setTimeout(function() {
       showPopup("<img src='img/welcome.jpg' width=200 height=125 style=\"border:2px solid #000000; float:middle;\" /><br/>Welcome to <span style='color:lime'><s>Jumanji</s> Cursed Boardgame</span>, the greatest (and totally original) boardgame of all time! <br/><br/>Go ahead, <span style='color:pink'>roll the dice</span>, your game token will begin moving! Reach the end and win the game to escape - you'll get to keep whatever you win!<br/><br/>Oh, what fun we're going to have!<br/><br/><span style='color:yellow'><em>\"We all make choices, but in the end, our choices make us.\"</em></span>");
     }, 300);
@@ -424,14 +782,20 @@ function cycleDiceMode() {
 //============================================================
 
 function MovePlayer(stepToMove) {
+  // Track total steps
+  totalSteps += Math.abs(stepToMove);
+  
+  // Apply endless mode difficulty: more dangerous events each lap
+  // (penalties increased in event logic via lapCount multiplier)
+  
   if (playertoken.currentpos == "Start") playertoken.currentpos = 1;
   if (playertoken.currentpos == "End") playertoken.currentpos = TOTAL_CELLS;
   
   playertoken.currentpos += stepToMove;
   
-  // Clamp
+  // Clamp (in endless mode, game over check is in setpos)
   if (playertoken.currentpos < 1) playertoken.currentpos = 1;
-  if (playertoken.currentpos > TOTAL_CELLS) playertoken.currentpos = TOTAL_CELLS;
+  if (!endlessMode && playertoken.currentpos > TOTAL_CELLS) playertoken.currentpos = TOTAL_CELLS;
   
   addLog("Moved " + stepToMove + " steps to position " + playertoken.currentpos);
   
@@ -603,6 +967,18 @@ var setQuestion = function(fixeddata) {
     currcelldata = getCellDataForPosition(playertoken.currentpos);
   }
 
+  // Data tracking: count specific event types
+  if (currcelldata) {
+    if (currcelldata.category === "WildMagic") {
+      wildMagicCount++;
+      addLog("Wild magic encounter #" + wildMagicCount);
+    }
+    if (currcelldata.category === "Transformation" || currcelldata.category === "CursedTransformation") {
+      shrineVisits++;
+      addLog("Transformation shrine visit #" + shrineVisits);
+    }
+  }
+
   if (currcelldata) {
     var qt = "";
     if (currcelldata.imagebig) {
@@ -639,6 +1015,10 @@ var setQuestion = function(fixeddata) {
         
       case "CursedTeleport":
         var retreatSteps = Math.floor(Math.random() * 6) + 7;
+        // Endless mode increases retreat penalty
+        if (endlessMode && lapCount > 0) {
+          retreatSteps += lapCount;
+        }
         currentOptions = shuffle(filterunwantedtf(findTfxByCategory("CursedTransformation"))).slice(0, 1);
         if (currentOptions.length === 0) {
           currentOptions.push({category: "CursedTeleport", effectname: "Stay Put", img:"none", value: 0});
@@ -706,7 +1086,8 @@ var setQuestion = function(fixeddata) {
         var challengeStats = ["strength", "stamina", "dexterity", "intelligence", "luck"];
         var testStat = challengeStats[Math.floor(Math.random() * challengeStats.length)];
         var statVal = playertoken.stats[testStat];
-        var difficulty = Math.floor(Math.random() * 2) + 1; // DC 1-2
+        // Endless mode increases challenge difficulty
+        var difficulty = Math.floor(Math.random() * 2) + 1 + (endlessMode ? Math.min(lapCount, 3) : 0); // DC 1-2 + lap bonus
         var success = statVal >= difficulty;
         
         currentOptions.push({category: "Challenge", effectname: "Accept Challenge", img:"none", value: 0, testStat: testStat, testDC: difficulty, success: success});
@@ -806,6 +1187,10 @@ function ApplyEffect(seldat) {
       case "Open Chest":
         showpopupafter = false;
         var isTrapped = (Math.floor(Math.random() * 3) === 0);
+        // Endless mode: higher trap chance
+        if (endlessMode && lapCount > 0) {
+          isTrapped = (Math.floor(Math.random() * Math.max(2, 3 - lapCount)) === 0);
+        }
         var trapOptions = shuffle(filterunwantedtf(findTfxByCategory("CursedTransformation"))).slice(0, 1);
         
         if (seldat.effectname === "Activate Glyph of Unlocking") {
@@ -1430,6 +1815,7 @@ function initGame() {
         placeIconsOnBoard();
         enableUI();
         playertoken.setpos(playertoken.currentpos || "Start");
+        updateEndlessUI();
         addLog("已从存档继续游戏");
         for (var i = 0; i < gameLog.length; i++) {
           addLog(gameLog[i]);
@@ -1437,6 +1823,29 @@ function initGame() {
       }
     };
   }
+  
+  // Set up board mode buttons
+  var mode0Btn = document.getElementById('boardMode0');
+  if (mode0Btn) {
+    mode0Btn.onclick = function() { switchBoardMode(0); };
+  }
+  var mode1Btn = document.getElementById('boardMode1');
+  if (mode1Btn) {
+    mode1Btn.onclick = function() { switchBoardMode(1); };
+  }
+  var mode2Btn = document.getElementById('boardMode2');
+  if (mode2Btn) {
+    mode2Btn.onclick = function() { switchBoardMode(2); };
+  }
+  
+  // Set up endless mode toggle button
+  var endlessBtn = document.getElementById('endlessToggleBtn');
+  if (endlessBtn) {
+    endlessBtn.onclick = toggleEndlessMode;
+  }
+  
+  // Initialize endless mode UI
+  updateEndlessUI();
 }
 
 // Auto-init when DOM is ready
